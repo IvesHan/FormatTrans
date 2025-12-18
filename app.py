@@ -9,9 +9,9 @@ import pikepdf
 import docx
 
 # 设置页面配置
-st.set_page_config(page_title="全能文件处理站 Pro", page_icon="🛠️", layout="wide")
+st.set_page_config(page_title="Ives全能文件处理站 Pro", page_icon="🛠️", layout="wide")
 
-st.title("🛠️ 全能文件处理站 Pro")
+st.title("🛠️ Ives全能文件处理站 Pro")
 st.markdown("增强功能：**CSV多分隔符支持、PDF排序合并、PDF转图、权限解除**")
 
 # --- 侧边栏：一级导航 ---
@@ -249,3 +249,4 @@ elif category == "📄 文档工具 (PDF/Word)":
 elif category == "🖼️ 图片处理 (Image)":
     st.info("图片功能参考上一版代码，此处从略以节省篇幅...")
     # 这里可以保留上一版本的图片处理代码
+
