@@ -3,5 +3,7 @@ pandas
 openpyxl
 xlsxwriter
 Pillow
-PyPDF2
+pypdf
+pdf2image
+pikepdf
 python-docx
