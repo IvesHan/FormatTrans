@@ -1,224 +1,274 @@
 import streamlit as st
 import pandas as pd
 import io
+import zipfile
 from PIL import Image
-from PyPDF2 import PdfMerger
+from pypdf import PdfWriter, PdfReader
+from pdf2image import convert_from_bytes
+import pikepdf
 import docx
+import pytesseract
 
-# 设置页面配置
-st.set_page_config(page_title="全能文件处理站", page_icon="🛠️", layout="wide")
+# ==========================================
+# 页面基础配置
+# ==========================================
+st.set_page_config(page_title="全能文件处理站 Pro", page_icon="🛠️", layout="wide")
 
-st.title("🛠️ 全能文件处理站")
-st.markdown("按 **文件类型** 分类处理：表格、图片、文档")
+st.title("🛠️ 全能文件处理站 Pro")
+st.markdown("""
+**功能概览**：
+* **📊 表格**：支持 CSV (中/英/法格式)、Excel、JSON 格式互转。
+* **📄 文档**：PDF 排序合并、PDF 转高清图、**OCR 文字识别 (支持扫描件)**。
+* **🖼️ 图片**：格式互转、修改 DPI、多图拼合转 PDF。
+""")
 
-# --- 侧边栏：一级导航 ---
+# ==========================================
+# 辅助函数定义
+# ==========================================
+
+def try_unlock_pdf(file_obj):
+    """尝试去除PDF权限限制"""
+    try:
+        pdf = pikepdf.open(file_obj)
+        new_pdf_bytes = io.BytesIO()
+        pdf.save(new_pdf_bytes)
+        return new_pdf_bytes
+    except pikepdf.PasswordError:
+        st.error("❌ 此文件设置了【打开密码】，无法强制破除。")
+        return None
+    except Exception as e:
+        st.error(f"❌ 权限处理失败: {e}")
+        return None
+
+def convert_df(df, fmt, sep=','):
+    """表格导出转换"""
+    buffer = io.BytesIO()
+    if fmt == "CSV":
+        buffer.write(df.to_csv(index=False, sep=sep).encode('utf-8-sig'))
+        return buffer, "text/csv", "csv"
+    elif fmt == "Excel":
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False)
+        return buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+    elif fmt == "JSON":
+        buffer.write(df.to_json(orient='records', force_ascii=False).encode('utf-8'))
+        return buffer, "application/json", "json"
+
+# ==========================================
+# 侧边栏导航
+# ==========================================
 category = st.sidebar.selectbox(
     "1️⃣ 选择文件大类",
-    ["📊 表格数据 (Excel/CSV/JSON)", "🖼️ 图片处理 (Image)", "📄 文档工具 (PDF/Word)"]
+    ["📊 表格数据 (CSV/Excel)", "📄 文档工具 (PDF/Word)", "🖼️ 图片处理 (Image)"]
 )
 
-# =========================================================
-# 模块 A: 表格数据 (保持原有逻辑，优化结构)
-# =========================================================
-if category == "📊 表格数据 (Excel/CSV/JSON)":
-    st.sidebar.markdown("---")
-    task = st.sidebar.radio("2️⃣ 选择操作", ["格式互转", "多表合并", "数据排序"])
+st.sidebar.markdown("---")
 
-    # 辅助函数
-    def load_table(file):
+# =========================================================
+# 模块 A: 表格数据 (已精简：仅保留转换)
+# =========================================================
+if category == "📊 表格数据 (CSV/Excel)":
+    st.header("表格格式转换")
+    
+    # CSV 读取设置
+    st.markdown("##### ⚙️ CSV 读取设置")
+    sep_option = st.selectbox(
+        "输入文件分隔符",
+        ["逗号 , (标准)", "分号 ; (欧洲)", "Tab (制表符)", "自定义"],
+        index=0
+    )
+    separator = ","
+    if "分号" in sep_option: separator = ";"
+    elif "Tab" in sep_option: separator = "\t"
+    elif "自定义" in sep_option:
+        separator = st.text_input("输入自定义分隔符", value="|")
+
+    f = st.file_uploader("上传表格", type=['csv', 'xlsx', 'xls', 'json'])
+    
+    if f:
+        # 读取逻辑
+        df = None
         try:
-            name = file.name
-            if name.endswith('.csv'): return pd.read_csv(file)
-            elif name.endswith('.tsv'): return pd.read_csv(file, sep='\t')
-            elif name.endswith(('.xls', '.xlsx')): return pd.read_excel(file)
-            elif name.endswith('.json'): return pd.read_json(file)
+            if f.name.endswith('.csv'): df = pd.read_csv(f, sep=separator)
+            elif f.name.endswith('.tsv'): df = pd.read_csv(f, sep='\t')
+            elif f.name.endswith(('.xls', '.xlsx')): df = pd.read_excel(f)
+            elif f.name.endswith('.json'): df = pd.read_json(f)
         except Exception as e:
             st.error(f"读取错误: {e}")
-            return None
 
-    def convert_table(df, fmt):
-        buf = io.BytesIO()
-        if fmt == "CSV":
-            buf.write(df.to_csv(index=False).encode('utf-8-sig'))
-            return buf, "text/csv", "csv"
-        elif fmt == "Excel":
-            with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False)
-            return buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
-        elif fmt == "JSON":
-            buf.write(df.to_json(orient='records', force_ascii=False).encode('utf-8'))
-            return buf, "application/json", "json"
-
-    if task == "格式互转":
-        st.header("表格格式转换")
-        f = st.file_uploader("上传表格", type=['csv', 'xlsx', 'xls', 'json'])
-        if f:
-            df = load_table(f)
-            if df is not None:
-                st.dataframe(df.head(3))
-                fmt = st.selectbox("转为:", ["Excel", "CSV", "JSON"])
-                if st.button("转换并下载"):
-                    data, mime, ext = convert_table(df, fmt)
-                    st.download_button(f"下载 .{ext}", data, f.name.split('.')[0]+f".{ext}", mime)
-
-    elif task == "多表合并":
-        st.header("合并多个表格")
-        files = st.file_uploader("上传多个结构相同的表格", type=['csv', 'xlsx', 'json'], accept_multiple_files=True)
-        if files and st.button("合并"):
-            dfs = [load_table(f) for f in files]
-            merged = pd.concat(dfs, ignore_index=True)
-            st.success(f"合并了 {len(dfs)} 个文件，共 {len(merged)} 行")
-            st.dataframe(merged.head())
-            data, mime, ext = convert_table(merged, "Excel")
-            st.download_button("下载合并后的 Excel", data, "merged.xlsx", mime)
-
-    elif task == "数据排序":
-        st.header("表格排序")
-        f = st.file_uploader("上传表格", type=['csv', 'xlsx'])
-        if f:
-            df = load_table(f)
-            if df is not None:
-                col = st.selectbox("排序列", df.columns)
-                asc = st.checkbox("升序 (A->Z)", value=True)
-                if st.button("排序"):
-                    res = df.sort_values(by=col, ascending=asc)
-                    st.dataframe(res.head())
-                    data, mime, ext = convert_table(res, "Excel")
-                    st.download_button("下载结果", data, "sorted.xlsx", mime)
+        if df is not None:
+            st.write("### 数据预览 (前5行)")
+            st.dataframe(df.head())
+            
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                target_fmt = st.selectbox("目标格式", ["Excel", "CSV", "JSON"])
+            with col2:
+                export_sep = ","
+                if target_fmt == "CSV":
+                    export_sep = st.selectbox("导出CSV分隔符", [",", ";", "\t"], index=0)
+            
+            if st.button("转换并下载"):
+                data, mime, ext = convert_df(df, target_fmt, export_sep)
+                st.download_button(f"下载 .{ext}", data, f.name.split('.')[0]+f".{ext}", mime)
 
 # =========================================================
-# 模块 B: 图片处理 (新增功能)
+# 模块 B: 文档工具 (增强 OCR)
+# =========================================================
+elif category == "📄 文档工具 (PDF/Word)":
+    doc_task = st.sidebar.radio("2️⃣ 选择操作", ["PDF 合并 (带排序)", "PDF 转 图片", "PDF/Word 提取文本 (OCR)", "PDF 权限解除"])
+
+    # --- 1. PDF 合并 ---
+    if doc_task == "PDF 合并 (带排序)":
+        st.header("PDF 合并 (支持自定义排序)")
+        files = st.file_uploader("上传多个 PDF", type=['pdf'], accept_multiple_files=True)
+        
+        if files:
+            file_map = {f.name: f for f in files}
+            df_files = pd.DataFrame({"文件名": [f.name for f in files], "排序权重": range(1, len(files)+1)})
+            st.info("👇 修改下方数字调整顺序 (1最前)")
+            edited_df = st.data_editor(df_files, use_container_width=True)
+            
+            if st.button("按顺序合并"):
+                sorted_names = edited_df.sort_values(by="排序权重")["文件名"].tolist()
+                merger = PdfWriter()
+                try:
+                    for name in sorted_names:
+                        f_obj = file_map[name]
+                        f_obj.seek(0)
+                        try:
+                            reader = PdfReader(f_obj)
+                            if reader.is_encrypted:
+                                f_obj.seek(0)
+                                unlocked = try_unlock_pdf(f_obj)
+                                if unlocked: reader = PdfReader(unlocked)
+                                else: continue
+                            merger.append(reader)
+                        except Exception: pass
+                    
+                    out = io.BytesIO()
+                    merger.write(out)
+                    out.seek(0)
+                    st.download_button("下载合并 PDF", out, "merged.pdf", "application/pdf")
+                except Exception as e:
+                    st.error(f"合并出错: {e}")
+
+    # --- 2. PDF 转图片 ---
+    elif doc_task == "PDF 转 图片":
+        st.header("PDF 转图片")
+        pdf_file = st.file_uploader("上传 PDF", type=['pdf'])
+        dpi = st.number_input("清晰度 (DPI)", 72, 600, 200)
+        
+        if pdf_file and st.button("转换"):
+            try:
+                images = convert_from_bytes(pdf_file.read(), dpi=dpi)
+                st.success(f"共 {len(images)} 页")
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, "w") as zf:
+                    for i, img in enumerate(images):
+                        ib = io.BytesIO()
+                        img.save(ib, format="JPEG")
+                        zf.writestr(f"page_{i+1:03d}.jpg", ib.getvalue())
+                st.download_button("下载图片包 (ZIP)", zip_buf.getvalue(), "images.zip", "application/zip")
+            except Exception as e:
+                st.error(f"错误: {e}")
+
+    # --- 3. 文本提取 (含 OCR) ---
+    elif doc_task == "PDF/Word 提取文本 (OCR)":
+        st.header("提取文本 (支持扫描件)")
+        st.info("如果是图片生成的 PDF (无法选中文本)，请勾选下方的 **'启用 OCR'**。")
+        
+        f = st.file_uploader("上传文件", type=['docx', 'pdf'])
+        use_ocr = st.checkbox("启用 OCR (扫描件/图片模式)", value=False, help="速度较慢，适用于图片型 PDF")
+        
+        if f:
+            txt_output = ""
+            
+            # Word 处理
+            if f.name.endswith('.docx'):
+                doc = docx.Document(f)
+                txt_output = "\n".join([p.text for p in doc.paragraphs])
+            
+            # PDF 处理
+            elif f.name.endswith('.pdf'):
+                if use_ocr:
+                    # OCR 模式：PDF -> 图片 -> 文字
+                    with st.spinner("正在进行 OCR 识别 (这可能需要几分钟)..."):
+                        try:
+                            # 1. 也是先解锁
+                            f.seek(0)
+                            pdf_bytes = f.read()
+                            
+                            # 2. 转为图片
+                            images = convert_from_bytes(pdf_bytes, dpi=300) # 300 DPI 识别率较好
+                            
+                            # 3. 逐页识别
+                            full_text = []
+                            progress_bar = st.progress(0)
+                            for i, img in enumerate(images):
+                                # 这里的 lang='chi_sim+eng' 表示同时识别简体中文和英文
+                                text = pytesseract.image_to_string(img, lang='chi_sim+eng')
+                                full_text.append(f"--- Page {i+1} ---\n{text}")
+                                progress_bar.progress((i + 1) / len(images))
+                            
+                            txt_output = "\n\n".join(full_text)
+                        except Exception as e:
+                            st.error(f"OCR 失败: {e} (请检查 packages.txt 是否包含 tesseract-ocr)")
+                else:
+                    # 普通模式：直接提取
+                    reader = PdfReader(f)
+                    for p in reader.pages:
+                        txt_output += p.extract_text() + "\n\n"
+            
+            if txt_output:
+                st.text_area("提取结果", txt_output, height=400)
+                st.download_button("下载 .txt", txt_output, "extracted_text.txt")
+            else:
+                st.warning("未能提取到文本。如果是扫描件，请勾选 '启用 OCR'。")
+
+    # --- 4. 权限解除 ---
+    elif doc_task == "PDF 权限解除":
+        st.header("🔒 PDF 权限移除")
+        locked = st.file_uploader("上传受限 PDF", type=['pdf'])
+        if locked and st.button("解锁"):
+            unlocked = try_unlock_pdf(locked)
+            if unlocked:
+                unlocked.seek(0)
+                st.success("解锁成功！")
+                st.download_button("下载解锁版 PDF", unlocked, f"unlocked_{locked.name}", "application/pdf")
+
+# =========================================================
+# 模块 C: 图片处理 (保持不变)
 # =========================================================
 elif category == "🖼️ 图片处理 (Image)":
-    st.sidebar.markdown("---")
     img_task = st.sidebar.radio("2️⃣ 选择操作", ["格式转换 / 修改PPI", "多图拼合转PDF"])
 
     if img_task == "格式转换 / 修改PPI":
-        st.header("图片格式转换 & DPI 设置")
-        st.info("支持 JPG, PNG, BMP, TIFF, WEBP 等互转。")
-        
-        uploaded_img = st.file_uploader("上传图片", type=['png', 'jpg', 'jpeg', 'bmp', 'tiff', 'webp'])
-        
-        if uploaded_img:
-            image = Image.open(uploaded_img)
-            st.image(image, caption=f"原图: {image.size} | 模式: {image.mode}", width=300)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                target_format = st.selectbox("目标格式", ["JPEG", "PNG", "PDF", "TIFF", "BMP", "WEBP"])
-            with col2:
-                # 默认 DPI 通常是 72 或 96，打印常用 300
-                target_dpi = st.number_input("设置 DPI/PPI (像素/英寸)", min_value=72, max_value=600, value=300, step=1)
-            
-            if st.button("处理图片"):
+        st.header("图片处理")
+        f = st.file_uploader("上传图片", type=['png', 'jpg', 'jpeg', 'bmp', 'tiff', 'webp'])
+        if f:
+            img = Image.open(f)
+            st.image(img, caption=f"尺寸: {img.size}", width=300)
+            c1, c2 = st.columns(2)
+            t_fmt = c1.selectbox("目标格式", ["JPEG", "PNG", "PDF", "TIFF"])
+            t_dpi = c2.number_input("DPI", 72, 600, 300)
+            if st.button("处理"):
                 buf = io.BytesIO()
-                
-                # 兼容性处理：JPEG 不支持透明度 (RGBA)，需转为 RGB
-                if target_format == "JPEG" and image.mode == "RGBA":
-                    image = image.convert("RGB")
-                
-                # 保存图片，设置 DPI
-                try:
-                    save_kwargs = {}
-                    if target_format != "WEBP": # WEBP saving doesn't always support dpi kwarg consistently in older versions
-                        save_kwargs['dpi'] = (target_dpi, target_dpi)
-                        
-                    image.save(buf, format=target_format, **save_kwargs)
-                    buf.seek(0)
-                    
-                    mime_map = {"JPEG": "image/jpeg", "PNG": "image/png", "PDF": "application/pdf", "TIFF": "image/tiff"}
-                    mime = mime_map.get(target_format, "application/octet-stream")
-                    ext = target_format.lower()
-                    
-                    st.success(f"转换成功！DPI 已设为 {target_dpi}")
-                    st.download_button(
-                        label=f"下载 .{ext}",
-                        data=buf,
-                        file_name=f"processed_image.{ext}",
-                        mime=mime
-                    )
-                except Exception as e:
-                    st.error(f"转换失败: {e}")
+                if t_fmt == "JPEG" and img.mode == "RGBA": img = img.convert("RGB")
+                save_args = {} if t_fmt == "WEBP" else {'dpi': (t_dpi, t_dpi)}
+                img.save(buf, format=t_fmt, **save_args)
+                st.download_button(f"下载 .{t_fmt}", buf.getvalue(), f"processed.{t_fmt.lower()}", "application/octet-stream")
 
     elif img_task == "多图拼合转PDF":
-        st.header("多图合并为一个 PDF")
-        img_files = st.file_uploader("按顺序上传图片", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-        
-        if img_files and st.button("生成 PDF"):
-            pil_images = []
-            for f in img_files:
-                img = Image.open(f)
-                if img.mode == "RGBA":
-                    img = img.convert("RGB")
-                pil_images.append(img)
-            
-            if pil_images:
-                pdf_buf = io.BytesIO()
-                # 第一张图作为基准，保存其他图为 append
-                pil_images[0].save(
-                    pdf_buf, "PDF", resolution=100.0, save_all=True, append_images=pil_images[1:]
-                )
-                pdf_buf.seek(0)
-                st.download_button("下载 PDF", pdf_buf, "images_merged.pdf", "application/pdf")
+        st.header("多图转 PDF")
+        files = st.file_uploader("按顺序上传", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+        if files and st.button("生成 PDF"):
+            imgs = [Image.open(f).convert("RGB") for f in files]
+            if imgs:
+                buf = io.BytesIO()
+                imgs[0].save(buf, "PDF", resolution=100.0, save_all=True, append_images=imgs[1:])
+                st.download_button("下载 PDF", buf.getvalue(), "images_merged.pdf", "application/pdf")
 
-# =========================================================
-# 模块 C: 文档工具 (新增功能)
-# =========================================================
-elif category == "📄 文档工具 (PDF/Word)":
-    st.sidebar.markdown("---")
-    doc_task = st.sidebar.radio("2️⃣ 选择操作", ["PDF 合并", "Word 转 纯文本", "PDF 提取文本"])
-
-    if doc_task == "PDF 合并":
-        st.header("PDF 文件合并")
-        pdfs = st.file_uploader("上传多个 PDF", type=['pdf'], accept_multiple_files=True)
-        
-        if pdfs and st.button("开始合并"):
-            merger = PdfMerger()
-            for pdf in pdfs:
-                merger.append(pdf)
-            
-            output = io.BytesIO()
-            merger.write(output)
-            output.seek(0)
-            
-            st.success("合并完成！")
-            st.download_button("下载合并后的 PDF", output, "merged_document.pdf", "application/pdf")
-
-    elif doc_task == "Word 转 纯文本":
-        st.header("提取 Word (.docx) 内容")
-        st.info("将 Word 文档中的文字快速提取为 TXT 文件。")
-        word_file = st.file_uploader("上传 Word 文件", type=['docx'])
-        
-        if word_file:
-            doc = docx.Document(word_file)
-            full_text = []
-            for para in doc.paragraphs:
-                full_text.append(para.text)
-            
-            text_str = "\n".join(full_text)
-            st.text_area("内容预览", text_str, height=300)
-            
-            st.download_button(
-                "下载 .txt 文件",
-                text_str,
-                word_file.name.replace(".docx", ".txt")
-            )
-
-    elif doc_task == "PDF 提取文本":
-        st.header("提取 PDF 文本")
-        # 注意：这只能提取可选中的文字，扫描件无法提取（需要OCR，那是另一个庞大的库）
-        pdf_file = st.file_uploader("上传 PDF", type=['pdf'])
-        
-        if pdf_file:
-            from PyPDF2 import PdfReader
-            reader = PdfReader(pdf_file)
-            text_content = ""
-            for page in reader.pages:
-                text_content += page.extract_text() + "\n\n"
-            
-            st.text_area("提取结果", text_content, height=300)
-            st.download_button("下载文本", text_content, "extracted_from_pdf.txt")
-
-# 页脚
 st.markdown("---")
-st.caption("多功能文件处理站 | 基于 Python Streamlit 构建")
+st.caption("全能文件处理站 Pro | Streamlit")
