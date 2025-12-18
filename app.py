@@ -11,9 +11,9 @@ import docx
 # ==========================================
 # 页面基础配置
 # ==========================================
-st.set_page_config(page_title="全能文件处理站 Pro", page_icon="🛠️", layout="wide")
+st.set_page_config(page_title="Ives全能文件处理站 Pro", page_icon="🛠️", layout="wide")
 
-st.title("🛠️ 全能文件处理站 Pro")
+st.title("🛠️ Ives全能文件处理站 Pro")
 st.markdown("""
 **功能概览**：
 * **📊 表格**：支持 CSV (中/英/法格式)、Excel、JSON 互转与合并。
@@ -316,3 +316,4 @@ elif category == "🖼️ 图片处理 (Image)":
 
 st.markdown("---")
 st.caption("全能文件处理站 Pro | Powered by Streamlit")
+
