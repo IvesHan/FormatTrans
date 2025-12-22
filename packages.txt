@@ -3,3 +3,5 @@ tesseract-ocr
 tesseract-ocr-chi-sim
 tesseract-ocr-eng
 libtesseract-dev
+libreoffice
+fonts-wqy-zenhei
